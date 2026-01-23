@@ -1,0 +1,8 @@
+# BATS helper libraries (downloaded by install script)
+test_helper/bats-support/
+test_helper/bats-assert/
+test_helper/bats-file/
+
+# Test artifacts
+*.log
+*.tmp

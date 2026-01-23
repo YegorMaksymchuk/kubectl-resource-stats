@@ -1,0 +1,371 @@
+#!/usr/bin/env bash
+
+# kubectl plugin for getting resource statistics in multiple output formats
+# Usage: kubectl resource stats <resource-type> <namespace> [-o FORMAT]
+# Example: kubectl resource stats pods kube-system
+# Example: kubectl resource stats pods kube-system -o json
+# Formats: table (default), csv, json
+# Note: Plugin filename is kubectl-resource-stats (with hyphen),
+#       but it's invoked as "kubectl resource stats" (with space)
+
+set -euo pipefail
+
+# Resource name mapping function (compatible with bash 3.2+)
+# Maps kubectl short resource names to full names
+normalize_resource_name() {
+    local resource="$1"
+    case "$resource" in
+        po) echo "pods" ;;
+        svc) echo "services" ;;
+        deploy) echo "deployments" ;;
+        ds) echo "daemonsets" ;;
+        rs) echo "replicasets" ;;
+        sts) echo "statefulsets" ;;
+        cm) echo "configmaps" ;;
+        ns) echo "namespaces" ;;
+        no) echo "nodes" ;;
+        hpa) echo "horizontalpodautoscalers" ;;
+        ing) echo "ingresses" ;;
+        *) echo "$resource" ;;  # Return as-is if not a short name
+    esac
+}
+
+# Function to display usage information
+# Usage: usage [exit_code]
+# If exit_code is not provided, function doesn't exit (for help command)
+usage() {
+    local exit_code="${1:-}"
+    echo "Usage: kubectl resource stats <resource-type> <namespace> [OPTIONS]"
+    echo ""
+    echo "Options:"
+    echo "  -o, --output FORMAT    Output format: table (default), csv, or json"
+    echo ""
+    echo "Examples:"
+    echo "  kubectl resource stats pods kube-system"
+    echo "  kubectl resource stats po kube-system                    # Using short name"
+    echo "  kubectl resource stats pods kube-system -o csv           # CSV format"
+    echo "  kubectl resource stats pods kube-system -o json          # JSON format"
+    echo "  kubectl resource stats pods kube-system --output table   # Table format (default)"
+    echo "  kubectl resource stats deploy default -o json            # Short name + JSON"
+    echo ""
+    echo "Output Formats:"
+    echo "  table    Human-readable table format (default)"
+    echo "  csv      Comma-separated values format"
+    echo "  json     JSON array format"
+    echo ""
+    echo "Supported resource types:"
+    echo "  Full names: pods, services, deployments, daemonsets, replicasets,"
+    echo "             statefulsets, configmaps, namespaces, nodes,"
+    echo "             horizontalpodautoscalers, ingresses"
+    echo ""
+    echo "  Short names: po, svc, deploy, ds, rs, sts, cm, ns, no, hpa, ing"
+    echo ""
+    echo "Common short name mappings:"
+    echo "  po    → pods"
+    echo "  svc   → services"
+    echo "  deploy → deployments"
+    echo "  ds    → daemonsets"
+    echo "  rs    → replicasets"
+    echo "  sts   → statefulsets"
+    echo "  cm    → configmaps"
+    echo "  ns    → namespaces"
+    echo "  no    → nodes"
+    echo "  hpa   → horizontalpodautoscalers"
+    echo "  ing   → ingresses"
+    echo ""
+    echo "Help:"
+    echo "  kubectl resource stats help"
+    echo "  kubectl resource stats --help"
+    echo "  kubectl resource stats -h"
+    echo ""
+    echo "Note: Plugin is invoked as 'kubectl resource stats' (with space),"
+    echo "      not 'kubectl resource-stats' (with hyphen)"
+    if [ -n "$exit_code" ]; then
+        exit "$exit_code"
+    fi
+}
+
+# Function to validate arguments
+validate_args() {
+    local resource_type="${1:-}"
+    local namespace="${2:-}"
+    
+    # Check if both are missing
+    if [ -z "$resource_type" ] && [ -z "$namespace" ]; then
+        echo "Error: Missing required arguments" >&2
+        usage 1
+    fi
+    
+    # Validate resource type
+    if [ -z "$resource_type" ]; then
+        echo "Error: Resource type cannot be empty" >&2
+        usage 1
+    fi
+    
+    # Validate namespace
+    if [ -z "$namespace" ]; then
+        echo "Error: Namespace cannot be empty" >&2
+        usage 1
+    fi
+}
+
+# Function to check if kubectl is available
+check_kubectl() {
+    if ! command -v kubectl &> /dev/null; then
+        echo "Error: kubectl is not installed or not in PATH" >&2
+        exit 1
+    fi
+}
+
+# Function normalize_resource_name is already defined above using case statement
+# This ensures compatibility with bash 3.2+ (macOS default)
+
+# Function to format output as table (default format)
+# Takes array of data rows and formats as human-readable table
+format_table() {
+    local resource_type=$1
+    local namespace=$2
+    shift 2
+    local rows=("$@")
+    
+    # Print table header with column alignment
+    printf "%-15s %-20s %-40s %10s %10s\n" "RESOURCE" "NAMESPACE" "NAME" "CPU" "MEMORY"
+    printf "%s\n" "----------------------------------------------------------------------------------------"
+    
+    # Print each row
+    for row in "${rows[@]}"; do
+        if [ -z "$row" ]; then
+            continue
+        fi
+        # Parse row: resource_type|namespace|name|cpu|memory
+        IFS='|' read -r res ns name cpu memory <<< "$row"
+        printf "%-15s %-20s %-40s %10s %10s\n" "$res" "$ns" "$name" "$cpu" "$memory"
+    done
+}
+
+# Function to format output as CSV
+# Takes array of data rows and formats as CSV
+format_csv() {
+    local resource_type=$1
+    local namespace=$2
+    shift 2
+    local rows=("$@")
+    
+    # Print CSV header
+    echo "Resource, Namespace, Name, CPU, Memory"
+    
+    # Print each row
+    for row in "${rows[@]}"; do
+        if [ -z "$row" ]; then
+            continue
+        fi
+        # Parse row: resource_type|namespace|name|cpu|memory
+        IFS='|' read -r res ns name cpu memory <<< "$row"
+        echo "$res, $ns, $name, $cpu, $memory"
+    done
+}
+
+# Function to format output as JSON
+# Takes array of data rows and formats as JSON array
+format_json() {
+    local resource_type=$1
+    local namespace=$2
+    shift 2
+    local rows=("$@")
+    
+    local json='['
+    local first=true
+    
+    # Build JSON array of objects
+    for row in "${rows[@]}"; do
+        if [ -z "$row" ]; then
+            continue
+        fi
+        # Parse row: resource_type|namespace|name|cpu|memory
+        IFS='|' read -r res ns name cpu memory <<< "$row"
+        
+        # Add comma separator if not first item
+        if [ "$first" = false ]; then
+            json+=','
+        fi
+        first=false
+        
+        # Escape JSON special characters in values
+        local escaped_name=$(echo "$name" | sed 's/"/\\"/g')
+        local escaped_cpu=$(echo "$cpu" | sed 's/"/\\"/g')
+        local escaped_memory=$(echo "$memory" | sed 's/"/\\"/g')
+        
+        # Build JSON object
+        json+="{\"resource\":\"$res\",\"namespace\":\"$ns\",\"name\":\"$escaped_name\",\"cpu\":\"$escaped_cpu\",\"memory\":\"$escaped_memory\"}"
+    done
+    
+    json+=']'
+    echo "$json"
+}
+
+# Function to get resource statistics and collect data into array
+# Returns data as array of rows (resource_type|namespace|name|cpu|memory)
+# Uses process substitution to avoid subshell issues with while loop
+get_resource_stats() {
+    local resource_type=$1
+    local namespace=$2
+    
+    # Check if kubectl top command works
+    if ! kubectl top "$resource_type" -n "$namespace" &>/dev/null; then
+        echo "Error: Failed to get resource statistics" >&2
+        echo "Make sure Metrics Server is installed and running in your cluster" >&2
+        echo "" >&2
+        echo "Check Metrics Server status:" >&2
+        echo "  kubectl get deployment metrics-server -n kube-system" >&2
+        echo "" >&2
+        echo "For local clusters (minikube, k3d), you may need to add --kubelet-insecure-tls:" >&2
+        echo "  kubectl patch deployment metrics-server -n kube-system --type='json' \\" >&2
+        echo "    -p='[{\"op\": \"add\", \"path\": \"/spec/template/spec/containers/0/args/-\", \"value\": \"--kubelet-insecure-tls\"}]'" >&2
+        exit 1
+    fi
+    
+    # Array to store data rows (will be populated and returned)
+    declare -a data_rows
+    
+    # Get statistics and collect data
+    # Use process substitution to avoid subshell, allowing array to persist
+    while IFS= read -r line; do
+        # Skip empty lines
+        if [ -z "$line" ]; then
+            continue
+        fi
+        
+        # Extract fields from the line
+        NAME=$(echo "$line" | awk '{print $1}')
+        CPU=$(echo "$line" | awk '{print $2}')
+        MEMORY=$(echo "$line" | awk '{print $3}')
+        
+        # Store row as delimited string: resource_type|namespace|name|cpu|memory
+        data_rows+=("${resource_type}|${namespace}|${NAME}|${CPU}|${MEMORY}")
+    done < <(kubectl top "$resource_type" -n "$namespace" 2>/dev/null | tail -n +2)
+    
+    # Output rows (will be captured by caller)
+    for row in "${data_rows[@]}"; do
+        echo "$row"
+    done
+}
+
+# Main execution
+main() {
+    # Check if kubectl is available
+    check_kubectl
+    
+    # Default output format
+    OUTPUT_FORMAT="table"
+    
+    # First, check for help command (can be anywhere)
+    for arg in "$@"; do
+        case "$arg" in
+            help|--help|-h)
+                usage
+                exit 0
+                ;;
+        esac
+    done
+    
+    # Parse all arguments to extract flags and positional args
+    # Flags can appear before or after positional arguments
+    RESOURCE_TYPE=""
+    NAMESPACE=""
+    
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            -o|--output)
+                if [ -z "${2:-}" ]; then
+                    echo "Error: -o/--output requires a format argument (table, csv, json)" >&2
+                    usage 1
+                fi
+                OUTPUT_FORMAT="$2"
+                # Validate format immediately
+                case "$OUTPUT_FORMAT" in
+                    table|csv|json)
+                        # Valid format
+                        ;;
+                    *)
+                        echo "Error: Invalid output format '$OUTPUT_FORMAT'. Valid formats: table, csv, json" >&2
+                        usage 1
+                        ;;
+                esac
+                shift 2
+                ;;
+            -*)
+                echo "Error: Unknown option '$1'" >&2
+                usage 1
+                ;;
+            *)
+                # Positional argument - collect resource type and namespace
+                if [ -z "$RESOURCE_TYPE" ]; then
+                    RESOURCE_TYPE="$1"
+                elif [ -z "$NAMESPACE" ]; then
+                    NAMESPACE="$1"
+                else
+                    echo "Error: Too many arguments" >&2
+                    usage 1
+                fi
+                shift
+                ;;
+        esac
+    done
+    
+    # Check if we have required arguments (before validate_args)
+    if [ -z "$RESOURCE_TYPE" ] || [ -z "$NAMESPACE" ]; then
+        echo "Error: Missing required arguments" >&2
+        usage 1
+    fi
+    
+    validate_args "$RESOURCE_TYPE" "$NAMESPACE"
+    
+    # Normalize resource name (convert short name to full name if needed)
+    NORMALIZED_RESOURCE_TYPE=$(normalize_resource_name "$RESOURCE_TYPE")
+    
+    # Get resource statistics and collect data
+    declare -a data_rows=()
+    while IFS= read -r row; do
+        if [ -n "$row" ]; then
+            data_rows+=("$row")
+        fi
+    done < <(get_resource_stats "$NORMALIZED_RESOURCE_TYPE" "$NAMESPACE" 2>&1)
+    
+    # Check if get_resource_stats failed (would have exited, but handle gracefully)
+    if [ ${#data_rows[@]} -eq 0 ] && [ -z "${data_rows[*]:-}" ]; then
+        # Empty results - still format (will show header only)
+        data_rows=()
+    fi
+    
+    # Format and output based on selected format
+    case "$OUTPUT_FORMAT" in
+        table)
+            if [ ${#data_rows[@]} -gt 0 ]; then
+                format_table "$NORMALIZED_RESOURCE_TYPE" "$NAMESPACE" "${data_rows[@]}"
+            else
+                format_table "$NORMALIZED_RESOURCE_TYPE" "$NAMESPACE"
+            fi
+            ;;
+        csv)
+            if [ ${#data_rows[@]} -gt 0 ]; then
+                format_csv "$NORMALIZED_RESOURCE_TYPE" "$NAMESPACE" "${data_rows[@]}"
+            else
+                format_csv "$NORMALIZED_RESOURCE_TYPE" "$NAMESPACE"
+            fi
+            ;;
+        json)
+            if [ ${#data_rows[@]} -gt 0 ]; then
+                format_json "$NORMALIZED_RESOURCE_TYPE" "$NAMESPACE" "${data_rows[@]}"
+            else
+                format_json "$NORMALIZED_RESOURCE_TYPE" "$NAMESPACE"
+            fi
+            ;;
+        *)
+            echo "Error: Invalid output format '$OUTPUT_FORMAT'. Valid formats: table, csv, json" >&2
+            exit 1
+            ;;
+    esac
+}
+
+# Run main function with all arguments
+main "$@"

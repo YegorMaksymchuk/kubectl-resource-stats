@@ -1,0 +1,104 @@
+# Test fixtures for kubectl-resource-stats plugin testing
+# Sample pod manifests for testing resource statistics
+
+apiVersion: v1
+kind: Pod
+metadata:
+  name: test-pod-nginx
+  namespace: test-ns
+  labels:
+    app: test-app
+    component: nginx
+spec:
+  containers:
+  - name: nginx
+    image: nginx:alpine
+    ports:
+    - containerPort: 80
+    resources:
+      requests:
+        cpu: 100m
+        memory: 128Mi
+      limits:
+        cpu: 200m
+        memory: 256Mi
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: test-pod-busybox
+  namespace: test-ns
+  labels:
+    app: test-app
+    component: busybox
+spec:
+  containers:
+  - name: busybox
+    image: busybox:latest
+    command: ['sh', '-c', 'sleep 3600']
+    resources:
+      requests:
+        cpu: 50m
+        memory: 64Mi
+      limits:
+        cpu: 100m
+        memory: 128Mi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: test-deployment
+  namespace: test-ns
+  labels:
+    app: test-deployment
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: test-deployment
+  template:
+    metadata:
+      labels:
+        app: test-deployment
+    spec:
+      containers:
+      - name: nginx
+        image: nginx:alpine
+        ports:
+        - containerPort: 80
+        resources:
+          requests:
+            cpu: 100m
+            memory: 128Mi
+          limits:
+            cpu: 200m
+            memory: 256Mi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: test-deployment-busybox
+  namespace: test-ns
+  labels:
+    app: test-deployment-busybox
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: test-deployment-busybox
+  template:
+    metadata:
+      labels:
+        app: test-deployment-busybox
+    spec:
+      containers:
+      - name: busybox
+        image: busybox:latest
+        command: ['sh', '-c', 'sleep 3600']
+        resources:
+          requests:
+            cpu: 50m
+            memory: 64Mi
+          limits:
+            cpu: 100m
+            memory: 128Mi
