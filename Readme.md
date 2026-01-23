@@ -6,7 +6,7 @@ Kubectl plugin for getting resource usage statistics (CPU and Memory) for Kubern
 
 Watch a live demo of the plugin in action:
 
-[![asciicast](https://asciinema.org/a/WjHVtGMGICgWqQ6U.svg)](https://asciinema.org/a/zgdkhkKn4BUaR95O)
+[![asciicast](https://asciinema.org/a/zgdkhkKn4BUaR95O.svg)](https://asciinema.org/a/zgdkhkKn4BUaR95O)
 
 ### Recording Your Own Demo
 
